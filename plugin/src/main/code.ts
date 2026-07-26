@@ -1827,11 +1827,32 @@ const handleRequest = async (
   }
 };
 
+type CacheInvalidationReason = "document" | "selection" | "page";
+
+interface CacheInvalidationMessage {
+  type: "cache-invalidate";
+  reason: CacheInvalidationReason;
+}
+
+const sendCacheInvalidation = (reason: CacheInvalidationReason): void => {
+  const msg: CacheInvalidationMessage = { type: "cache-invalidate", reason };
+  figma.ui.postMessage(msg);
+};
+
 figma.showUI(__html__, { width: 320, height: 180 });
 sendStatus();
 
 figma.on("selectionchange", () => {
   sendStatus();
+  sendCacheInvalidation("selection");
+});
+
+figma.on("currentpagechange", () => {
+  sendCacheInvalidation("page");
+});
+
+figma.on("documentchange", () => {
+  sendCacheInvalidation("document");
 });
 
 figma.ui.onmessage = async (message) => {

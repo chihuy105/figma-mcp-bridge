@@ -78,6 +78,13 @@ export default function App() {
         return;
       }
 
+      if (msg.type === "cache-invalidate") {
+        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify(msg));
+        }
+        return;
+      }
+
       if (!("requestId" in msg)) {
         return;
       }

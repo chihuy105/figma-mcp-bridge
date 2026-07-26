@@ -65,18 +65,18 @@ If you want to know more about how it works, read the [How it works](#how-it-wor
 
 | Tool | Description |
 |------|-------------|
-| `list_files` | List all connected Figma files (supports multi-file workflows) |
-| `get_document` | Get the current Figma page document tree |
-| `get_selection` | Get the currently selected nodes in Figma |
-| `get_node` | Get a specific Figma node by ID (colon format, e.g. `4029:12345`) |
-| `get_styles` | Get all local paint, text, effect, and grid styles |
-| `get_metadata` | Get file name, pages, and current page info |
-| `get_design_context` | Get a depth-limited tree optimized for understanding design context |
-| `get_variable_defs` | Get all variable collections, modes, and values (design tokens) |
-| `get_screenshot` | Export nodes as PNG/SVG/JPG/PDF (base64-encoded) |
+| `list_files` | List all connected Figma files (supports multi-file workflows) (cached) |
+| `get_document` | Get the current Figma page document tree (cached) |
+| `get_selection` | Get the currently selected nodes in Figma (cached) |
+| `get_node` | Get a specific Figma node by ID (colon format, e.g. `4029:12345`) (cached) |
+| `get_styles` | Get all local paint, text, effect, and grid styles (cached) |
+| `get_metadata` | Get file name, pages, and current page info (cached) |
+| `get_design_context` | Get a depth-limited tree optimized for understanding design context (cached) |
+| `get_variable_defs` | Get all variable collections, modes, and values (design tokens) (cached) |
+| `get_screenshot` | Export nodes as PNG/SVG/JPG/PDF (base64-encoded) (cached) |
 | `save_screenshots` | Export and save screenshots directly to the local filesystem |
-| `get_motion_styles` | List all available animation presets (beta) |
-| `get_node_motion` | Read a node's current animation styles and properties (beta) |
+| `get_motion_styles` | List all available animation presets (beta) (cached) |
+| `get_node_motion` | Read a node's current animation styles and properties (beta) (cached) |
 | `apply_animation_style` | Apply a preset animation style to a node (beta) |
 | `remove_animation_style` | Remove an applied animation style from a node (beta) |
 | `apply_manual_keyframe_track` | Apply a manual keyframe track to a node property (beta) |
@@ -104,6 +104,28 @@ If you want to know more about how it works, read the [How it works](#how-it-wor
 | `delete_nodes` | Delete nodes with explicit confirmation |
 
 All tools accept an optional `fileKey` parameter when multiple Figma files are connected. Use `list_files` to discover connected files and their keys.
+
+### Local read-result cache
+
+Read-only tools are transparently cached locally on the bridge server. This
+speeds up repeated queries and reduces load on the Figma plugin.
+
+- Cache location is `<bridge repository>/docs/ui/`. It is Git-ignored and
+  contains private design content — never commit or share it.
+- Exact successful results of read-only tools are cached. Mutations and
+  `save_screenshots` are never cached or replayed.
+- Artifact layout uses per-file hashed namespaces and readable
+  `node_<id>` folders. Each entry contains `response.json`,
+  `manifest.json`, and decoded screenshot images when applicable.
+- Cache is invalidated before every document mutation, on bridge
+  reconnect/disconnect, and on supported Figma document, page, and selection
+  change events.
+- Unsaved / identity-less files use a session fallback and cannot safely
+  reuse cache entries after a plugin restart.
+- Delete `<bridge repository>/docs/ui/` while the bridge is stopped to clear
+  all artifacts. Do not delete files while the bridge is running.
+- Artifacts may contain unreleased design text and images. Users must
+  never commit, share, or place secrets in them.
 
 ### Editing Notes
 

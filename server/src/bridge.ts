@@ -2,6 +2,11 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { BridgeRequest, BridgeResponse, ConnectedFile } from "./types.js";
+import {
+  isCacheableReadRequest,
+  isNonDocumentWriteRequest,
+  ResultCache,
+} from "./result-cache.js";
 
 interface PendingRequest {
   resolve: (resp: BridgeResponse) => void;
@@ -23,6 +28,7 @@ export class Bridge {
   private pending = new Map<string, PendingRequest>();
   private counter = 0;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly resultCache = new ResultCache();
 
   constructor() {
     this.wss = new WebSocketServer({ noServer: true });
@@ -69,14 +75,40 @@ export class Bridge {
     });
   }
 
+  /**
+   * Resolve the effective fileKey for a request.
+   * - If fileKey is provided, return it directly.
+   * - If only one file is connected, use its key.
+   * - Otherwise throw with a helpful error matching resolveConnection style.
+   */
+  private resolveFileKey(fileKey?: string): string {
+    if (fileKey) return fileKey;
+
+    if (this.connections.size === 0) {
+      throw new Error(
+        "No plugin connected. Open a Figma file and run the bridge plugin."
+      );
+    }
+
+    if (this.connections.size === 1) {
+      return this.connections.values().next().value!.fileKey;
+    }
+
+    const files = this.listConnectedFiles();
+    throw new Error(
+      `Multiple files connected. Specify a fileKey to choose which file to query. Connected files: ${files.map((f) => `"${f.fileName}" (fileKey: ${f.fileKey})`).join(", ")}. Use the list_files tool to see all connected files.`
+    );
+  }
+
   private handleConnection(
     ws: WebSocket,
     fileKey: string,
     fileName: string
   ): void {
-    // Replace existing connection for the same file
+    // Replace existing connection for the same file — invalidate cache
     const existing = this.connections.get(fileKey);
     if (existing) {
+      this.resultCache.dropFile(fileKey);
       existing.ws.close();
     }
     this.connections.set(fileKey, {
@@ -94,7 +126,16 @@ export class Bridge {
 
     ws.on("message", (data) => {
       try {
-        const resp: BridgeResponse = JSON.parse(data.toString());
+        const parsed = JSON.parse(data.toString());
+
+        // Handle cache-invalidate control messages from the plugin
+        if (parsed.type === "cache-invalidate") {
+          // No requestId — not a normal response; invalidate silently
+          this.resultCache.invalidate(fileKey).catch(() => {});
+          return;
+        }
+
+        const resp: BridgeResponse = parsed;
         const pending = this.pending.get(resp.requestId);
         if (pending) {
           clearTimeout(pending.timeout);
@@ -110,6 +151,7 @@ export class Bridge {
       const current = this.connections.get(fileKey);
       if (current?.ws === ws) {
         this.connections.delete(fileKey);
+        this.resultCache.dropFile(fileKey);
         console.error(`Plugin disconnected: ${fileName} (${fileKey})`);
       }
       this.rejectPendingForSocket(
@@ -123,6 +165,7 @@ export class Bridge {
       const current = this.connections.get(fileKey);
       if (current?.ws === ws) {
         this.connections.delete(fileKey);
+        this.resultCache.dropFile(fileKey);
       }
       this.rejectPendingForSocket(
         ws,
@@ -193,8 +236,39 @@ export class Bridge {
     return this.sendWithParams(requestType, nodeIds, undefined, fileKey);
   }
 
-  sendWithParams(
+  async sendWithParams(
     requestType: string,
+    nodeIds?: string[],
+    params?: Record<string, unknown>,
+    fileKey?: string
+  ): Promise<BridgeResponse> {
+    const resolvedFileKey = this.resolveFileKey(fileKey);
+
+    // Always generate a requestId before cache/raw dispatch so the wire
+    // response and cache caller share one ID.
+    const requestId = this.nextId();
+
+    // Cacheable read — try cache first
+    if (isCacheableReadRequest(requestType)) {
+      return this.resultCache.getOrCreate(
+        { fileKey: resolvedFileKey, requestType, nodeIds, params },
+        requestId,
+        () => this.doSend(requestType, requestId, nodeIds, params, resolvedFileKey)
+      );
+    }
+
+    // Non-read, non-document-write (save_screenshots) — no invalidation
+    if (!isNonDocumentWriteRequest(requestType)) {
+      await this.resultCache.invalidate(resolvedFileKey);
+    }
+
+    return this.doSend(requestType, requestId, nodeIds, params, resolvedFileKey);
+  }
+
+  /** Raw WebSocket dispatch using the given requestId. */
+  private doSend(
+    requestType: string,
+    requestId: string,
     nodeIds?: string[],
     params?: Record<string, unknown>,
     fileKey?: string
@@ -213,7 +287,6 @@ export class Bridge {
         return;
       }
 
-      const requestId = this.nextId();
       const request: BridgeRequest = {
         type: requestType,
         requestId,
@@ -255,6 +328,11 @@ export class Bridge {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
+    }
+
+    // Drop cache state for all connected files
+    for (const [fileKey] of this.connections) {
+      this.resultCache.dropFile(fileKey);
     }
 
     // Reject all pending requests
