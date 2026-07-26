@@ -386,6 +386,95 @@ describe("ResultCache — screenshot image artifact extraction", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  test("raw base64 with JPG format produces image_1.jpg artifact and retains raw base64", async () => {
+    root = tempCacheRoot();
+    const cache = new ResultCache(root);
+
+    // Synthetic bytes as base64 (not a data URI)
+    const rawBase64 = Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46,
+    ]).toString("base64");
+
+    const fileKey = "raw-img-jpg";
+    const descriptor = {
+      fileKey,
+      requestType: "get_screenshot",
+      nodeIds: ["1496:17285"],
+      params: { format: "JPG" },
+    };
+
+    await cache.getOrCreate(
+      descriptor,
+      "req-raw",
+      async () =>
+        mockResponse("get_screenshot", "req-raw", {
+          exports: [
+            {
+              nodeId: "1496:17285",
+              nodeName: "Homepage_Mobile",
+              format: "JPG",
+              base64: rawBase64,
+              width: 375,
+              height: 3932,
+            },
+          ],
+        }),
+    );
+
+    // Verify response JSON retains the original raw base64 (not converted to data URI)
+    const cache2 = new ResultCache(root);
+    const hit = await cache2.get(descriptor, "req-raw-hit");
+    expect(hit).toBeDefined();
+    expect(hit!.data).toEqual({
+      exports: [
+        {
+          nodeId: "1496:17285",
+          nodeName: "Homepage_Mobile",
+          format: "JPG",
+          base64: rawBase64,
+          width: 375,
+          height: 3932,
+        },
+      ],
+    });
+
+    // Verify image_1.jpg artifact file exists on disk under cache root
+    const { existsSync, readFileSync, readdirSync } = await import("node:fs");
+    const { join: joinPath } = await import("node:path");
+    const findArtifact = (
+      dir: string,
+      name: string,
+    ): string | null => {
+      try {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const full = joinPath(dir, entry.name);
+          if (entry.isDirectory()) {
+            const found = findArtifact(full, name);
+            if (found) return found;
+          } else if (entry.name === name) {
+            return full;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      return null;
+    };
+
+    const imagePath = findArtifact(root, "image_1.jpg");
+    expect(imagePath).not.toBeNull();
+    const imageBytes = readFileSync(imagePath!);
+    expect(imageBytes.length).toBeGreaterThan(0);
+
+    // Verify manifest.json lists the artifact
+    const manifestPath = findArtifact(root, "manifest.json");
+    expect(manifestPath).not.toBeNull();
+    const manifest = JSON.parse(
+      readFileSync(manifestPath!, "utf-8"),
+    );
+    expect(manifest.artifacts).toContain("image_1.jpg");
+  });
+
   test("PNG data URI produces image_1.png artifact and retains original URI", async () => {
     root = tempCacheRoot();
     const cache = new ResultCache(root);

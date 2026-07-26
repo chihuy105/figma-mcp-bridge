@@ -421,6 +421,31 @@ export class ResultCache {
     }
 
     if (data && typeof data === "object") {
+      // Handle raw base64 + format sibling pattern (non-data-URI screenshot artifact)
+      if (!Array.isArray(data)) {
+        const obj = data as Record<string, unknown>;
+        const base64 = obj.base64;
+        const fmt = obj.format;
+        if (
+          typeof base64 === "string" &&
+          typeof fmt === "string" &&
+          !base64.startsWith("data:")
+        ) {
+          const mime = RAW_FORMAT_TO_MIME[fmt];
+          if (mime) {
+            const dataUri = `data:image/${mime};base64,${base64}`;
+            const artifact = this.tryWriteImageArtifact(
+              dataUri,
+              entryDir,
+              artifacts.length + 1
+            );
+            if (artifact) {
+              artifacts.push(artifact);
+            }
+          }
+        }
+      }
+
       for (const value of Object.values(data as Record<string, unknown>)) {
         this.collectImageArtifacts(value, entryDir, artifacts);
       }
@@ -487,6 +512,12 @@ export class ResultCache {
  * Build the canonical cache key JSON string for a descriptor.
  * Generation is checked at manifest level, not embedded in the key.
  */
+const RAW_FORMAT_TO_MIME: Record<string, string> = {
+  JPG: "jpeg",
+  PNG: "png",
+  SVG: "svg+xml",
+};
+
 export function buildCacheKey(descriptor: CacheRequestDescriptor): string {
   const canonicalKey = {
     schemaVersion: CACHE_SCHEMA_VERSION,
