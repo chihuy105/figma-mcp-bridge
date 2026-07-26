@@ -181,3 +181,6 @@ server/dist/
 .vscode/
 
 .claude/
+
+# Local Figma bridge read-result cache. Contains private design content.
+docs/ui/

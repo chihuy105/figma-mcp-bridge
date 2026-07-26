@@ -34,3 +34,20 @@ export enum Role {
   Leader = 1,
   Follower = 2,
 }
+
+export interface CacheRequestDescriptor {
+  fileKey: string;
+  requestType: string;
+  nodeIds?: string[];
+  params?: Record<string, unknown>;
+}
+
+export interface CacheEntryManifest {
+  schemaVersion: 1;
+  keyHash: string;
+  requestType: string;
+  nodeIds: string[];
+  generation: number;
+  createdAt: string;
+  artifacts: string[];
+}
